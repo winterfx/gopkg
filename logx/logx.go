@@ -1,5 +1,7 @@
 // Package logx provides a flexible, module-based logging system built on top of slog.
 // It supports context extraction, multiple log levels, and concurrent safe operations.
+// The package is designed to be used in large applications where different modules
+// need their own logging configurations while maintaining a consistent logging interface.
 package logx
 
 import (
@@ -9,16 +11,24 @@ import (
 )
 
 // Logx represents a logger instance for a specific module.
+// It extends slog.Logger with module-specific functionality and context extraction capabilities.
+// Each Logx instance is associated with a unique module name and can have its own
+// set of context extractors for pulling values from context.Context.
 type Logx struct {
 	*slog.Logger
 	moduleName        string
 	contextExtractors map[string]ContextExtractor
 }
 
+// moduleLoggers is a thread-safe map storing all registered logger instances.
+// The key is the module name and the value is the corresponding Logx instance.
 var moduleLoggers sync.Map
 
+// defaultModuleName is the name used when no specific module name is provided.
 const defaultModuleName = "default"
 
+// getModuleName returns the module name or default if empty.
+// This ensures we always have a valid module name for logging.
 func getModuleName(name string) string {
 	if name == "" {
 		return defaultModuleName
@@ -27,8 +37,12 @@ func getModuleName(name string) string {
 }
 
 // Register creates and registers a new logger instance for the specified module.
-// If a logger for the module already exists, it returns the existing instance.
-// If moduleName is empty, it uses the default module name.
+// Parameters:
+//   - moduleName: The name of the module. If empty, uses default module name.
+//   - options: Configuration options for the logger. If nil, uses default options.
+//
+// Returns:
+//   - *Logx: The new or existing logger instance for the module.
 func Register(moduleName string, options *Options) *Logx {
 	moduleName = getModuleName(moduleName)
 	logx, ok := moduleLoggers.Load(moduleName)
@@ -40,6 +54,10 @@ func Register(moduleName string, options *Options) *Logx {
 }
 
 // newLogx creates a new logger instance for the specified module with given options.
+// This is an internal function used by Register to initialize a new logger.
+// Parameters:
+//   - moduleName: The name of the module.
+//   - options: Configuration options for the logger.
 func newLogx(moduleName string, options *Options) *Logx {
 	logger := &Logx{
 		moduleName: moduleName,
@@ -49,7 +67,13 @@ func newLogx(moduleName string, options *Options) *Logx {
 }
 
 // GetLogger retrieves the logger instance for the specified module.
-// Returns the logger instance and true if found, nil and false otherwise.
+// This is useful when you want to check if a logger exists without creating one.
+// Parameters:
+//   - moduleName: The name of the module to look up.
+//
+// Returns:
+//   - *Logx: The logger instance if found, nil otherwise
+//   - bool: true if logger was found, false otherwise
 func GetLogger(moduleName string) (*Logx, bool) {
 	moduleName = getModuleName(moduleName)
 	if logx, ok := moduleLoggers.Load(moduleName); ok {
@@ -59,7 +83,8 @@ func GetLogger(moduleName string) (*Logx, bool) {
 }
 
 // Default returns the default logger instance.
-// If the default logger doesn't exist, it creates one with default options.
+// If no default logger exists, it creates one with default options.
+// This method is useful when you don't need module-specific logging.
 func Default() *Logx {
 	logger, _ := GetLogger(defaultModuleName)
 	if logger == nil {
@@ -69,6 +94,12 @@ func Default() *Logx {
 }
 
 // InfoContext logs a message at Info level with context-extracted values.
+// It automatically extracts values from context using registered extractors
+// and adds them to the log entry.
+// Parameters:
+//   - ctx: Context containing values to extract
+//   - msg: The message to log
+//   - args: Additional key-value pairs to include in the log
 func (c *Logx) InfoContext(ctx context.Context, msg string, args ...any) {
 	args = setValueFromContext(ctx, c.contextExtractors, args...)
 	c.Logger.InfoContext(ctx, msg, args...)
@@ -92,6 +123,9 @@ func (c *Logx) WarnContext(ctx context.Context, msg string, args ...any) {
 	c.Logger.WarnContext(ctx, msg, args...)
 }
 
+// configLogger configures a logger instance with the provided options.
+// It sets up the JSON handler, source addition, log level, and context extractors.
+// If options is nil, default options are used.
 func configLogger(logger *Logx, options *Options) {
 	if options == nil {
 		options = defaultOptions()
@@ -107,6 +141,16 @@ func configLogger(logger *Logx, options *Options) {
 	logger.Logger = logger.Logger.With(slog.String("module", logger.moduleName))
 }
 
+// setValueFromContext extracts values from context using registered extractors
+// and appends them to the provided arguments list.
+// This is an internal function used by all logging methods.
+// Parameters:
+//   - ctx: The context to extract values from
+//   - ce: Map of context extractors
+//   - args: Existing arguments to append to
+//
+// Returns:
+//   - []any: Combined slice of existing args and extracted values
 func setValueFromContext(ctx context.Context, ce map[string]ContextExtractor, args ...any) []any {
 	for key, extractor := range ce {
 		v := extractor(ctx)
